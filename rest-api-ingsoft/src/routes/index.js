@@ -23,8 +23,11 @@ const llavePrivada = privateKey;
 //Función para encriptar
 function encriptarMensaje(mensaje, llavePublica) {
     try {
+    const {mensajeComprimido, tablaCompresion} = comprimirMensaje(mensaje);
+        //Combina el mensaje comprimido y la tabla en un objeto
+        const msjAEncriptar = {mensajeComprimido, tablaCompresion};
       // Convierte el mensaje a una cadena de texto
-      const mensajeString = JSON.stringify(mensaje);
+      const mensajeString = JSON.stringify(msjAEncriptar);
       // Encripta el mensaje como una cadena de texto
       const mensajeEncriptado = crypto.publicEncrypt(
         llavePublica,
@@ -59,6 +62,36 @@ function desencriptarMensaje(mensajeEncriptado, llavePrivada) {
         return null;
     }
 }
+//Compresión de longitud variable y genera una tabla
+function comprimirMensaje(mensaje) {
+    const tablaCompresion = {}; // Objeto para almacenar la tabla de compresión
+    let codigoActual = 0; // Código actual para asociar con secuencias de caracteres
+
+    // Función para agregar una entrada en la tabla
+    function agregarEntrada(secuencia) {
+        tablaCompresion[secuencia] = codigoActual;
+        codigoActual++;
+    }
+
+    let mensajeComprimido = [];
+    let secuenciaActual = ''; // Secuencia actual que se está construyendo
+
+    for (let i = 0; i < mensaje.length; i++) {
+        secuenciaActual += mensaje[i];
+        if (!tablaCompresion[secuenciaActual]) {
+            // La secuencia no existe en la tabla, la agregamos
+            agregarEntrada(secuenciaActual.substring(0, secuenciaActual.length - 1));
+            mensajeComprimido.push(tablaCompresion[secuenciaActual.substring(0, secuenciaActual.length - 1)]);
+            secuenciaActual = mensaje[i];
+        }
+    }
+
+    // Agregamos la última secuencia
+    agregarEntrada(secuenciaActual);
+
+    return { mensajeComprimido, tablaCompresion };
+}
+
 //Routes
 router.get('/msj', (req, res) => {
     const mensajesDesencriptados = msj.map((mensajeEncriptado) => {
