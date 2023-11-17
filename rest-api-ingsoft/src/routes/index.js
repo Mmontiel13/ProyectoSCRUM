@@ -1,14 +1,13 @@
 const { Router } = require('express');
 const router = Router();
-const underscore = require('underscore');
 const crypto = require('crypto');
 
-const msj = require('../sample.json');
+let messagesStorage = require('../sample.json');
 
-//Genera llaves RSA de 2048 bits
+//Generates an 2048-bits RSA key
 const {publicKey, privateKey} = crypto.generateKeyPairSync('rsa',{
     modulusLength: 2048,
-    publicKeyEnconding: {
+    publicKeyEncoding: {
         type: 'spki',
         format: 'pem'
     },
@@ -17,109 +16,116 @@ const {publicKey, privateKey} = crypto.generateKeyPairSync('rsa',{
         format: 'pem'
     }
 });
-
 const llavePublica = publicKey;
 const llavePrivada = privateKey;
-//Función para encriptar
-function encriptarMensaje(mensaje, llavePublica) {
-    try {
-    const {mensajeComprimido, tablaCompresion} = comprimirMensaje(mensaje);
-        //Combina el mensaje comprimido y la tabla en un objeto
-        const msjAEncriptar = {mensajeComprimido, tablaCompresion};
-      // Convierte el mensaje a una cadena de texto
-      const mensajeString = JSON.stringify(msjAEncriptar);
-      // Encripta el mensaje como una cadena de texto
-      const mensajeEncriptado = crypto.publicEncrypt(
-        llavePublica,
-        Buffer.from(mensajeString, 'utf8')
-      );
-      // Devuelve el mensaje encriptado como un Buffer
-      return mensajeEncriptado;
-    } catch (error) {
-      console.error('Error al encriptar el mensaje:', error);
-      return null;
-    }
-  }
-//Función para desencriptar
-function desencriptarMensaje(mensajeEncriptado, llavePrivada) {
-    try {
-        const mensajeDesencriptado = crypto.privateDecrypt(
-            {
-                key: llavePrivada
-            },
-            mensajeEncriptado
-        );
 
-        // Convierte el mensaje desencriptado de Buffer a cadena de texto
-        const mensajeString = mensajeDesencriptado.toString('utf8');
-
-        // Convierte la cadena de texto a un objeto JSON si es necesario
-        const mensajeJSON = JSON.parse(mensajeString);
-
-        return mensajeJSON;
-    } catch (error) {
-        console.error('Error al desencriptar el mensaje:', error);
-        return null;
-    }
-}
-//Compresión de longitud variable y genera una tabla
+// comprimirMensaje creates a tablaCompresion which is a compression table that
+// late will be used to decrypt the message
 function comprimirMensaje(mensaje) {
-    const tablaCompresion = {}; // Objeto para almacenar la tabla de compresión
-    let codigoActual = 0; // Código actual para asociar con secuencias de caracteres
+    const tablaCompresion = {};
+    let codigoActual = 1; // Start from 1 because 0 is reserved for unknown sequences
 
-    // Función para agregar una entrada en la tabla
     function agregarEntrada(secuencia) {
-        tablaCompresion[secuencia] = codigoActual;
-        codigoActual++;
-    }
-
-    let mensajeComprimido = [];
-    let secuenciaActual = ''; // Secuencia actual que se está construyendo
-
-    for (let i = 0; i < mensaje.length; i++) {
-        secuenciaActual += mensaje[i];
-        if (!tablaCompresion[secuenciaActual]) {
-            // La secuencia no existe en la tabla, la agregamos
-            agregarEntrada(secuenciaActual.substring(0, secuenciaActual.length - 1));
-            mensajeComprimido.push(tablaCompresion[secuenciaActual.substring(0, secuenciaActual.length - 1)]);
-            secuenciaActual = mensaje[i];
+        if (!tablaCompresion[secuencia]) {
+            tablaCompresion[secuencia] = codigoActual;
+            codigoActual++;
         }
     }
 
-    // Agregamos la última secuencia
-    agregarEntrada(secuenciaActual);
+    let mensajeComprimido = [];
+
+    for (let i = 0; i < mensaje.length; i++) {
+        agregarEntrada(mensaje[i]);
+        mensajeComprimido.push(tablaCompresion[mensaje[i]]);
+    }
 
     return { mensajeComprimido, tablaCompresion };
 }
 
-//Routes
-router.get('/msj', (req, res) => {
-    const mensajesDesencriptados = msj.map((mensajeEncriptado) => {
-        const mensajeDesencriptado = desencriptarMensaje(mensajeEncriptado, llavePrivada);
-        return mensajeDesencriptado;
-    });
+// descomprimirMensaje recieves the compressed message  and the tablaCompresion
+function descomprimirMensaje(mensajeComprimido, tablaCompresion) {
+    const tablaDescompresion = Object.fromEntries(
+        Object.entries(tablaCompresion).map(([key, value]) => [value, key])
+    );
 
-    res.json(mensajesDesencriptados);
+    const mensajeDescomprimido = mensajeComprimido.map(code => tablaDescompresion[code]).join('');
+
+    return mensajeDescomprimido;
+}
+
+
+// encriptarMensaje creates an object with the compressed message and the tablaCompresion
+function encriptarMensaje(message, publicKey) {
+    const { mensajeComprimido, tablaCompresion } = comprimirMensaje(message);
+    console.log('mensajeComprimido:', mensajeComprimido);
+    console.log('tablaCompresion:', tablaCompresion);
+    const buffer = Buffer.from(mensajeComprimido);
+    const encrypted = crypto.publicEncrypt(publicKey, buffer);
+    return { encrypted: Array.from(encrypted), tablaCompresion };
+}
+
+// desencriptarMensaje recieves the encrypted message, the private key and the tablaCompresion
+// and uses the tablaCompresion to decrypt the message
+function desencriptarMensaje(encryptedMessage, privateKey, compressionTable) {
+    const buffer = Buffer.from(encryptedMessage);
+    const decryptedCompressedMessage = crypto.privateDecrypt(privateKey, buffer);
+    const originalMessage = descomprimirMensaje(Array.from(decryptedCompressedMessage), compressionTable);
+    return originalMessage;
+}
+
+
+
+// receives the messagesStorages array and uses desencriptarMensaje to decrypt the message
+// and shows it to the client
+router.get('/msj/:id', (req, res) => {
+    const id = Number(req.params.id);
+    const messages = messagesStorage.filter(msg => msg.recipientID === id);
+    if (!messages.length) {
+        res.status(404).send('Messages not found');
+        return;
+    }
+    messages.forEach(message => {
+        if (message.decompressed) {
+            res.status(403).send('Message has already been decompressed');
+            return;
+        }
+        try {
+            message.originalMessages = desencriptarMensaje(message.encrypted, llavePrivada, message.tablaCompresion);
+            message.decompressed = true;
+            console.log('originalMessages:', message.originalMessages);
+        } catch (error) {
+            console.error('Error al desencriptar/descomprimir el mensaje:', error);
+            res.status(500).send('Error al desencriptar/descomprimir el mensaje');
+        }
+    });
+    res.json(messages.map(message => message.originalMessages));
 });
 
+// pushes the object which contains the message and tablaCompresion into the messagesStorage array
+let uniqueMsg_ID = 0;
 router.post('/msj', (req, res) => {
-    //Guardar mensaje
-    const newMsj = {...req.body};
-    const msjEncriptado = encriptarMensaje(newMsj, llavePublica);
-    //console.log(msjEncriptado);
-    msj.push(msjEncriptado);
-    res.json(msj);
-    //res.send("Mensaje enviado");
+    console.log(req.body);
+    const recipID = req.body.recipientID;
+    const { encrypted, tablaCompresion } = encriptarMensaje(req.body.Mensaje, llavePublica);
+    if (!tablaCompresion) {
+        res.status(500).send('Error al comprimir el mensaje');
+        return;
+    }
+    const newMessage = { idMsg: uniqueMsg_ID++,encrypted, tablaCompresion, recipientID: recipID, decompressed: false };
+    messagesStorage.push(newMessage);
+    res.json(newMessage);
 });
 
 router.delete('/msj/:id', (req, res) => {
-    const {id} = req.params;
-    underscore.each(msj, (mensaje, i) => {
-        if (mensaje.id == id){
-            msj.splice(i, 1);
-        }
-    });
-    res.send(msj);
+    const { id } = req.params;
+    const initialLength = msj.length;
+    msj = msj.filter((mensaje) => mensaje.id != id);
+
+    if (msj.length === initialLength) {
+        res.status(404).send('Message with the given ID was not found.');
+    } else {
+        res.send(msj);
+    }
 });
 
 module.exports = router;
